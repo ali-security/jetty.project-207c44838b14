@@ -1600,9 +1600,9 @@ public class RequestTest
                     "\n"
         );
         assertTrue(response.startsWith("HTTP/1.1 200 OK"));
-        assertEquals(1,cookies.size());
-        assertEquals("name", cookies.get(0).getName());
-        assertEquals("quoted=\"value\"", cookies.get(0).getValue());
+        // The DQUOTE and backslash are not valid RFC6265 cookie-octets, so the cookie is
+        // discarded rather than reported with the raw quoting still in its value.
+        assertEquals(0,cookies.size());
 
         cookies.clear();
         response=_connector.getResponses(
@@ -1613,11 +1613,12 @@ public class RequestTest
                 "\n"
         );
         assertTrue(response.startsWith("HTTP/1.1 200 OK"));
-        assertEquals(2,cookies.size());
+        // CVE-2023-26049 : the ';' inside the quoted section used to be appended to the
+        // value of "other", which is how the value of a following cookie could be
+        // exfiltrated.  "other" is now discarded and only "name" survives.
+        assertEquals(1,cookies.size());
         assertEquals("name", cookies.get(0).getName());
         assertEquals("value", cookies.get(0).getValue());
-        assertEquals("other", cookies.get(1).getName());
-        assertEquals("quoted=;value", cookies.get(1).getValue());
 
         cookies.clear();
         response=_connector.getResponses(
@@ -1635,14 +1636,13 @@ public class RequestTest
         );
         assertThat(response, Matchers.startsWith("HTTP/1.1 200 OK"));
         assertThat(response.substring(15), containsString("HTTP/1.1 200 OK"));
-        assertEquals(4,cookies.size());
+        // Only "name" survives each request now that "other" is rejected (CVE-2023-26049),
+        // but the parsed cookies are still shared between the two identical requests.
+        assertEquals(2,cookies.size());
         assertEquals("name", cookies.get(0).getName());
         assertEquals("value", cookies.get(0).getValue());
-        assertEquals("other", cookies.get(1).getName());
-        assertEquals("quoted=;value", cookies.get(1).getValue());
 
-        assertSame(cookies.get(0), cookies.get(2));
-        assertSame(cookies.get(1), cookies.get(3));
+        assertSame(cookies.get(0), cookies.get(1));
 
         cookies.clear();
         response=_connector.getResponses(
@@ -1660,14 +1660,17 @@ public class RequestTest
         );
         assertThat(response, Matchers.startsWith("HTTP/1.1 200 OK"));
         assertThat(response.substring(15), containsString("HTTP/1.1 200 OK"));
-        assertEquals(4,cookies.size());
+        // The first request only yields "name" ("other" is rejected), the second yields
+        // both "name" and "other", and the differing fields force a re-parse.
+        assertEquals(3,cookies.size());
         assertEquals("name", cookies.get(0).getName());
         assertEquals("value", cookies.get(0).getValue());
-        assertEquals("other", cookies.get(1).getName());
-        assertEquals("quoted=;value", cookies.get(1).getValue());
+        assertEquals("name", cookies.get(1).getName());
+        assertEquals("value", cookies.get(1).getValue());
+        assertEquals("other", cookies.get(2).getName());
+        assertEquals("othervalue", cookies.get(2).getValue());
 
-        assertNotSame(cookies.get(0), cookies.get(2));
-        assertNotSame(cookies.get(1), cookies.get(3));
+        assertNotSame(cookies.get(0), cookies.get(1));
 
         cookies.clear();
 //NOTE: the javax.servlet.http.Cookie class sets the system property org.glassfish.web.rfc2109_cookie_names_enforced
@@ -1681,26 +1684,26 @@ public class RequestTest
                 "Connection: close\r\n"+
         "\r\n");
 
+        // "name2" is discarded: the backslash is not a valid RFC6265 cookie-octet
+        assertEquals(7,cookies.size());
         assertEquals("name0", cookies.get(0).getName());
         assertEquals("value0", cookies.get(0).getValue());
         assertEquals("name1", cookies.get(1).getName());
         assertEquals("value1", cookies.get(1).getValue());
-        assertEquals("name2", cookies.get(2).getName());
-        assertEquals("\"value2\"", cookies.get(2).getValue());
-        assertEquals("name3", cookies.get(3).getName());
-        assertEquals("value3=value3", cookies.get(3).getValue());
-        assertEquals(2, cookies.get(3).getVersion());
-        assertEquals("/path", cookies.get(3).getPath());
-        assertEquals("acme.com", cookies.get(3).getDomain());
-        assertEquals("$port=8080", cookies.get(3).getComment());
-        assertEquals("name4", cookies.get(4).getName());
+        assertEquals("name3", cookies.get(2).getName());
+        assertEquals("value3=value3", cookies.get(2).getValue());
+        assertEquals(2, cookies.get(2).getVersion());
+        assertEquals("/path", cookies.get(2).getPath());
+        assertEquals("acme.com", cookies.get(2).getDomain());
+        assertEquals("$port=8080", cookies.get(2).getComment());
+        assertEquals("name4", cookies.get(3).getName());
+        assertEquals("", cookies.get(3).getValue());
+        assertEquals("name5", cookies.get(4).getName());
         assertEquals("", cookies.get(4).getValue());
-        assertEquals("name5", cookies.get(5).getName());
+        assertEquals("name6", cookies.get(5).getName());
         assertEquals("", cookies.get(5).getValue());
-        assertEquals("name6", cookies.get(6).getName());
-        assertEquals("", cookies.get(6).getValue());
-        assertEquals("name7", cookies.get(7).getName());
-        assertEquals("value7", cookies.get(7).getValue());
+        assertEquals("name7", cookies.get(6).getName());
+        assertEquals("value7", cookies.get(6).getValue());
 
         cookies.clear();
         response=_connector.getResponses(
@@ -1712,9 +1715,9 @@ public class RequestTest
                         "\n"
                 );
         assertTrue(response.startsWith("HTTP/1.1 200 OK"));
-        assertEquals(1,cookies.size());
-        assertEquals("__utmz", cookies.get(0).getName());
-        assertEquals("14316.133020.1.1.utr=gna.de|ucn=(real)|utd=reral|utct=/games/hen-one,gnt-50-ba-keys:key,2072262.html", cookies.get(0).getValue());
+        // The comma is not a valid RFC6265 cookie-octet, so this Google Analytics shaped
+        // cookie is now discarded rather than reported with the comma in its value.
+        assertEquals(0,cookies.size());
 
     }
     

@@ -127,6 +127,8 @@ public class CookieCutter
             boolean invalue=false;
             boolean quoted=false;
             boolean escaped=false;
+            boolean quoteClosed=false;
+            boolean reject=false;
             int tokenstart=-1;
             int tokenend=-1;
             for (int i = 0, length = hdr.length(), last=length-1; i < length; i++)
@@ -136,6 +138,12 @@ public class CookieCutter
                 // Handle quoted values for name or value
                 if (quoted)
                 {
+                    if (isRFC6265RejectedCharacter(quoted,c))
+                    {
+                        reject=true;
+                        continue;
+                    }
+
                     if (escaped)
                     {
                         escaped=false;
@@ -147,6 +155,7 @@ public class CookieCutter
                         case '"':
                             tokenend=i;
                             quoted=false;
+                            quoteClosed=true;
 
                             // handle quote as last character specially
                             if (i==last)
@@ -164,6 +173,15 @@ public class CookieCutter
                         case '\\':
                             escaped=true;
                             continue;
+
+                        case ';':
+                            // A ';' is not a cookie-octet. It must not be appended to the
+                            // quoted value, otherwise the value of a following (possibly
+                            // HttpOnly) cookie can be smuggled into this cookie's value.
+                            // Reject the whole cookie instead.
+                            reject=true;
+                            continue;
+
                         default:
                             continue;
                     }
@@ -183,15 +201,15 @@ public class CookieCutter
                             case '"':
                                 if (tokenstart<0)
                                 {
+                                    // An opening quote as the last character is an
+                                    // unterminated quote, so the cookie is discarded
                                     quoted=true;
                                     tokenstart=i;
+                                    tokenend=i;
+                                    continue;
                                 }
-                                tokenend=i;
-                                if (i==last)
-                                {
-                                    value = hdr.substring(tokenstart, tokenend+1);
-                                    break;
-                                }
+                                // A DQUOTE may not appear once the cookie-value has started
+                                reject=true;
                                 continue;
 
                             case ';':
@@ -204,6 +222,14 @@ public class CookieCutter
                                 break;
                                 
                             default:
+                                if (quoteClosed || isRFC6265RejectedCharacter(quoted,c))
+                                {
+                                    // Content after a closed quoted section, or a character that
+                                    // is not a cookie-octet, is not a valid cookie-value
+                                    reject=true;
+                                    continue;
+                                }
+
                                 if (tokenstart<0)
                                     tokenstart=i;
                                 tokenend=i;
@@ -231,7 +257,8 @@ public class CookieCutter
                                     tokenstart=i;
                                 }
                                 tokenend=i;
-                                if (i==last)
+                                // An opening quote as the last character is an unterminated quote
+                                if (i==last && !quoted)
                                 {
                                     name = hdr.substring(tokenstart, tokenend+1);
                                     value = "";
@@ -253,9 +280,13 @@ public class CookieCutter
                                     name = hdr.substring(tokenstart, tokenend+1);
                                 tokenstart = -1;
                                 invalue=true;
+                                quoteClosed=false;
                                 continue;
                                 
                             default:
+                                if (isRFC6265RejectedCharacter(quoted,c))
+                                    reject=true;
+
                                 if (tokenstart<0)
                                     tokenstart=i;
                                 tokenend=i;
@@ -282,7 +313,11 @@ public class CookieCutter
                         if (name.startsWith("$"))
                         {
                             String lowercaseName = name.toLowerCase(Locale.ENGLISH);
-                            if ("$path".equals(lowercaseName))
+                            if (reject)
+                            {
+                                // Ignore an attribute with an invalid value
+                            }
+                            else if ("$path".equals(lowercaseName))
                             {
                                 if (cookie!=null)
                                     cookie.setPath(value);
@@ -302,6 +337,12 @@ public class CookieCutter
                                 version = Integer.parseInt(value);
                             }
                         }
+                        else if (reject)
+                        {
+                            // Discard the invalid cookie, and do not let the
+                            // attributes that follow it apply to a previous cookie
+                            cookie = null;
+                        }
                         else
                         {
                             cookie = new Cookie(name, value);
@@ -318,6 +359,15 @@ public class CookieCutter
                     name = null;
                     value = null;
                 }
+
+                // A ';' ends the cookie: no name, value or rejection carries over to the next one
+                if (c==';')
+                {
+                    name = null;
+                    value = null;
+                    reject = false;
+                    quoteClosed = false;
+                }
             }
         }
 
@@ -325,4 +375,20 @@ public class CookieCutter
         _lastCookies=_cookies;
     }
     
+    protected boolean isRFC6265RejectedCharacter(boolean inQuoted, char c)
+    {
+        /* From RFC6265 - Section 4.1.1 - Syntax
+         *  cookie-octet  = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
+         *                  ; US-ASCII characters excluding CTLs,
+         *                  ; whitespace DQUOTE, comma, semicolon,
+         *                  ; and backslash
+         *
+         * Note: DQUOTE and semicolon are used as separator by the parser,
+         * so we can consider them authorized.
+         */
+        return c > 127 ||  // 8-bit characters
+            Character.isISOControl(c) || // control characters
+            c == ',' || // comma
+            c == '\\';  // backslash
+    }
 }
